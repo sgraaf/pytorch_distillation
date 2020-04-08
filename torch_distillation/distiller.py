@@ -26,6 +26,7 @@ class _Distiller(object):
         optimizer: Optimizer,
         num_epochs: int,
         scheduler: Optional[Scheduler] = None,
+        use_tqdm: Optional[bool] = True,
         logger: Optional[Logger] = None,
     ) -> None:
         self.student = student
@@ -35,6 +36,7 @@ class _Distiller(object):
         self.optimizer = optimizer
         self.num_epochs = num_epochs
         self.scheduler = scheduler
+        self.use_tqdm = use_tqdm
         self.logger = logger
 
     def distill(self):
@@ -68,6 +70,7 @@ class Distiller(_Distiller):
         optimizer: Optimizer,
         num_epochs: int,
         scheduler: Optional[Scheduler] = None,
+        use_tqdm: Optional[bool] = True,
         use_cuda: Optional[bool] = False,
         logger: Optional[Logger] = None,
     ) -> None:
@@ -95,36 +98,51 @@ class Distiller(_Distiller):
         for epoch in range(self.num_epochs):
             if self.logger is not None:
                 self.logger.info(f'Starting with epoch {epoch+1}/{self.num_epochs}')
+
+            # initialize the progress bar
+            if self.use_tqdm:
+                pbar = tqdm(
+                    desc=f'Distilling [epoch {epoch+1}/{self.num_epochs}]',
+                    total=len(self.dataloader),
+                    unit='batch',
+                    leave=False
+                )
             
-            with tqdm(self.dataloader, desc='Distilling', total=len(self.dataloader)) as pbar:
-                for step, batch in enumerate(pbar):
-                    # clear all gradients
-                    self.optimizer.zero_grad()
+            for step, batch in enumerate(self.dataloader):
+                # clear all gradients
+                self.optimizer.zero_grad()
 
-                    # unpack batch
-                    input, target = batch
+                # unpack batch
+                input, target = batch
 
-                    # send input to device
-                    input = input.to('cuda')
+                # send input to device
+                input = input.to('cuda')
 
-                    # forward pass
-                    student_logits = self.student(input)
-                    with torch.no_grad():
-                        teacher_logits = self.teacher(input)
+                # forward pass
+                student_logits = self.student(input)
+                with torch.no_grad():
+                    teacher_logits = self.teacher(input)
 
-                    # compute the loss
-                    loss = self.loss_fn(student_logits, teacher_logits)
+                # compute the loss
+                loss = self.loss_fn(student_logits, teacher_logits)
 
-                    # update the last_loss in the progress bar
+                # backward pass
+                loss.backward()
+
+                # update the parameters
+                self.optimizer.step()
+                if self.scheduler is not None:
+                    self.scheduler.step()
+
+                # update the progress bar
+                if self.use_tqdm:
+                    pbar.update()
                     pbar.set_postfix({'last_loss': loss.item()})
-
-                    # backward pass
-                    loss.backward()
-
-                    # update the parameters
-                    self.optimizer.step()
-                    if self.scheduler is not None:
-                        self.scheduler.step()
+            
+            # close the progress bar
+            if self.use_tqdm:
+                pbar.close()
+                    
 
 
 class DistributedDistiller(_Distiller):
@@ -151,8 +169,9 @@ class DistributedDistiller(_Distiller):
         optimizer: Optimizer,
         num_epochs: int,
         local_rank: int,
-        scheduler: Scheduler = None,
-        logger: Logger = None,
+        scheduler: Optional[Scheduler] = None,
+        use_tqdm: Optional[bool] = True,
+        logger: Optional[Logger] = None,
     ) -> None:
         super(DistributedDistiller, self).__init__(
             student,
@@ -189,33 +208,47 @@ class DistributedDistiller(_Distiller):
             if self.logger is not None:
                 self.logger.info(f'Starting with epoch {epoch+1}/{self.num_epochs}')
 
-            with tqdm(self.dataloader, desc='Distilling', total=len(self.dataloader)) as pbar:
-                for step, batch in enumerate(pbar):
-                    # clear all gradients
-                    self.optimizer.zero_grad()
+            # initialize the progress bar
+            if self.use_tqdm:
+                pbar = tqdm(
+                    desc=f'Distilling [epoch {epoch+1}/{self.num_epochs}]',
+                    total=len(self.dataloader),
+                    unit='batch',
+                    leave=False
+                )
+            
+            for step, batch in enumerate(self.dataloader):
+                # clear all gradients
+                self.optimizer.zero_grad()
 
-                    # unpack batch
-                    input, target = batch
+                # unpack batch
+                input, target = batch
 
-                    # send input to device
-                    input = input.to(f'cuda:{self.local_rank}')
+                # send input to device
+                input = input.to(f'cuda:{self.local_rank}')
 
-                    # forward pass
-                    student_logits = self.student(input)
-                    with torch.no_grad():
-                        teacher_logits = self.teacher(input)
+                # forward pass
+                student_logits = self.student(input)
+                with torch.no_grad():
+                    teacher_logits = self.teacher(input)
 
-                    # compute the loss
-                    loss = self.loss_fn(student_logits, teacher_logits)
-                    loss = loss.mean()
-                    
-                    # update the last_loss in the progress bar
+                # compute the loss
+                loss = self.loss_fn(student_logits, teacher_logits)
+                loss = loss.mean()
+
+                # backward pass
+                loss.backward()
+
+                # update the parameters
+                self.optimizer.step()
+                if self.scheduler is not None:
+                    self.scheduler.step()
+
+                # update the progress bar
+                if self.use_tqdm:
+                    pbar.update()
                     pbar.set_postfix({'last_loss': loss.item()})
-
-                    # backward pass
-                    loss.backward()
-
-                    # update the parameters
-                    self.optimizer.step()
-                    if self.scheduler is not None:
-                        self.scheduler.step()
+            
+            # close the progress bar
+            if self.use_tqdm:
+                pbar.close()
