@@ -41,17 +41,19 @@ N_GRAD_ACCUMULATION_STEPS = 50
 MAX_GRAD_NORM = 5.0
 SEED = 42
 
+
 def main():
     parser = ArgumentParser('Distributed distillation example')
-    parser.add_argument('--local_rank', type=int, default=-1, metavar='N', help='Local process rank')
+    parser.add_argument('--local_rank', type=int, default=-1,
+                        metavar='N', help='Local process rank')
     params = parser.parse_args()
     params.is_master = params.local_rank == 0
 
     # initialize multi-GPU
     if params.is_master:
         logger.info('Initializing PyTorch distributed')
-    torch.cuda.set_device(params.local_rank)                 
-    torch.distributed.init_process_group(backend='nccl', init_method='env://')  
+    torch.cuda.set_device(params.local_rank)
+    torch.distributed.init_process_group(backend='nccl', init_method='env://')
 
     # set seed(s)
     if params.is_master:
@@ -119,6 +121,7 @@ def main():
     if params.is_master:
         logger.info('Initializing the loss function')
     loss_fn = KDLoss(temperature=TEMPERATURE, reduction='batchmean')
+
     def loss_fn_wrapper(input, target):
         return loss_fn(input[0], target[0])
 
@@ -146,7 +149,8 @@ def main():
     if params.is_master:
         logger.info('Initializing the scheduler')
     n_steps_epoch = len(dataloader)
-    n_train_steps = int(n_steps_epoch / N_GRAD_ACCUMULATION_STEPS * N_EPOCHS) + 1
+    n_train_steps = int(
+        n_steps_epoch / N_GRAD_ACCUMULATION_STEPS * N_EPOCHS) + 1
     n_warmup_steps = math.ceil(n_train_steps * WARMUP_PROP)
 
     def lr_lambda(current_step):
@@ -157,7 +161,7 @@ def main():
         optimizer=optimizer,
         lr_lambda=lr_lambda,
         last_epoch=-1
-    )                                     
+    )
 
     # initialize the distiller
     if params.is_master:

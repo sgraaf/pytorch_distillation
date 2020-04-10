@@ -54,7 +54,7 @@ class _Distiller(object):
 
 class Distiller(_Distiller):
     """Distiller class for Knowledge Distillation.
-    
+
     Args:
         student: The student model.
         teacher: The teacher model.
@@ -110,7 +110,8 @@ class Distiller(_Distiller):
 
         for epoch in range(self.num_epochs):
             if self.logger is not None:
-                self.logger.info(f'Starting with epoch {epoch+1}/{self.num_epochs}')
+                self.logger.info(
+                    f'Starting with epoch {epoch+1}/{self.num_epochs}')
 
             # initialize the progress bar
             if self.use_tqdm:
@@ -120,7 +121,7 @@ class Distiller(_Distiller):
                     unit='batch',
                     leave=False
                 )
-            
+
             for step, batch in enumerate(self.dataloader):
                 # unpack batch
                 input, target = batch
@@ -145,8 +146,11 @@ class Distiller(_Distiller):
                 if step % self.num_gradient_accumulation_steps == 0:
                     # clip the gradient
                     if self.max_gradient_norm is not None:
-                        clip_grad_norm_(self.student.parameters(), self.max_gradient_norm)
-                    
+                        clip_grad_norm_(
+                            self.student.parameters(),
+                            self.max_gradient_norm
+                        )
+
                     # update the parameters
                     self.optimizer.step()
                     if self.scheduler is not None:
@@ -159,16 +163,15 @@ class Distiller(_Distiller):
                 if self.use_tqdm:
                     pbar.update()
                     pbar.set_postfix({'last_loss': loss.item()})
-            
+
             # close the progress bar
             if self.use_tqdm:
                 pbar.close()
-                    
 
 
 class DistributedDistiller(_Distiller):
     """DistributedDistiller class for distributed (multi-GPU) Knowledge Distillation.
-    
+
     Args:
         student: The student model.
         teacher: The teacher model.
@@ -237,7 +240,8 @@ class DistributedDistiller(_Distiller):
             torch.distributed.barrier()
 
             if self.is_master and self.logger is not None:
-                self.logger.info(f'Starting with epoch {epoch+1}/{self.num_epochs}')
+                self.logger.info(
+                    f'Starting with epoch {epoch+1}/{self.num_epochs}')
 
             # initialize the progress bar
             if self.use_tqdm:
@@ -247,7 +251,7 @@ class DistributedDistiller(_Distiller):
                     unit='batch',
                     leave=False
                 )
-            
+
             for step, batch in enumerate(self.dataloader):
                 # unpack batch
                 input, target = batch
@@ -263,7 +267,7 @@ class DistributedDistiller(_Distiller):
                 # compute the loss
                 loss = self.loss_fn(student_logits, teacher_logits)
                 loss = loss.mean()
-                
+
                 # rescale the loss
                 loss /= self.num_gradient_accumulation_steps
 
@@ -273,7 +277,10 @@ class DistributedDistiller(_Distiller):
                 if step % self.num_gradient_accumulation_steps == 0:
                     # clip the gradient
                     if self.max_gradient_norm is not None:
-                        clip_grad_norm_(self.student.parameters(), self.max_gradient_norm)
+                        clip_grad_norm_(
+                            self.student.parameters(),
+                            self.max_gradient_norm
+                        )
 
                     # update the parameters
                     self.optimizer.step()
@@ -287,7 +294,7 @@ class DistributedDistiller(_Distiller):
                 if self.use_tqdm:
                     pbar.update()
                     pbar.set_postfix({'last_loss': loss.item()})
-            
+
             # close the progress bar
             if self.use_tqdm:
                 pbar.close()
