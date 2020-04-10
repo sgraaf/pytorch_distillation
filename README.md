@@ -7,7 +7,7 @@ Pytorch Distillation requires PyTorch (>= 1.4.0) to be installed. Please refer t
 ```bash
 git clone https://github.com/sgraaf/pytorch_distillation.git
 cd pytorch_distillation
-pip setup.py install
+python setup.py install
 ```
 
 ## Example
