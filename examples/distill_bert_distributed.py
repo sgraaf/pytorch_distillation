@@ -29,18 +29,6 @@ logger = logging.getLogger(__name__)
 logging.getLogger('transformers.modeling_utils').setLevel(logging.ERROR)
 logging.getLogger('transformers.configuration_utils').setLevel(logging.ERROR)
 
-MIN_SEQUENCE_LEN = 12
-MAX_SEQUENCE_LEN = 512
-N_EPOCHS = 3
-BATCH_SIZE = 5
-LEARNING_RATE = 5e-4
-EPSILON = 1e-6
-WARMUP_PROP = 0.05
-WEIGHT_DECAY = 0.0
-TEMPERATURE = 2.0
-N_GRAD_ACCUMULATION_STEPS = 50
-MAX_GRAD_NORM = 5.0
-
 
 def main():
     parser = ArgumentParser('Distributed distillation example')
