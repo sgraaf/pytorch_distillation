@@ -1,14 +1,17 @@
 from .data import GroupedBatchSampler, LanguageModelingDataset, chunk, quantize
-from .distiller import Distiller, DistributedDistiller
-from .loss import KDLoss
+from .distiller import Distiller, HintonDistiller, SanhDistiller
+from .loss import HintonLoss, SanhLoss, SoftTargetLoss
 
 __version__ = '0.0.1'
 __all__ = [
     'chunk',
     'Distiller',
-    'DistributedDistiller',
     'GroupedBatchSampler',
-    'KDLoss',
+    'HintonDistiller'
+    'HintonLoss',
     'LanguageModelingDataset',
-    'quantize'
+    'quantize',
+    'SanhDistiller',
+    'SanhLoss',
+    'SoftTargetLoss'
 ]

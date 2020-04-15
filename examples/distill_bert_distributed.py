@@ -4,6 +4,7 @@ import logging
 import math
 import os
 from argparse import ArgumentParser
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -11,12 +12,12 @@ import torch
 from tokenizers import BertWordPieceTokenizer
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, DistributedSampler, RandomSampler
 from transformers import (BertForMaskedLM, DistilBertConfig,
                           DistilBertForMaskedLM)
 
-from torch_distillation import (DistributedDistiller, GroupedBatchSampler,
-                                KDLoss, LanguageModelingDataset, quantize)
+from torch_distillation import (GroupedBatchSampler, LanguageModelingDataset,
+                                SanhDistiller, SanhLoss, quantize)
 
 # initialize the logger
 logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - PID: %(process)d -  %(message)s',
@@ -39,72 +40,121 @@ WEIGHT_DECAY = 0.0
 TEMPERATURE = 2.0
 N_GRAD_ACCUMULATION_STEPS = 50
 MAX_GRAD_NORM = 5.0
-SEED = 42
 
 
 def main():
     parser = ArgumentParser('Distributed distillation example')
+    parser.add_argument('--data_file', type=str, metavar='PATH',
+                        required=True, help='Path to file containing the data (sequences).')
+    parser.add_argument('--output_dir', type=str, metavar='PATH', required=True,
+                        help='Path to the output directory (for logs, checkpoints, parameters, etc.).')
+    parser.add_argument('-f', '--force', action='store_true',
+                        help='Overwrite output_dir if it already exists.')
+    parser.add_argument('--student_config_file', type=str, metavar='PATH',
+                        required=True, help='Path to the student model configuration.')
+    parser.add_argument('--student_weights_file', type=str, default=None,
+                        metavar='PATH', help='Path to the student model initialization weights.')
+    parser.add_argument('--teacher_type', type=str, default=None,
+                        choices={'bert-base-uncased'}, help='The pre-trained teacher model type to initialize.')
+    parser.add_argument('--tokenizer_vocab_file', type=str, metavar='PATH',
+                        required=True, help='Path to the tokenizer vocabulary.')
+    parser.add_argument('--min_sequence_len', type=int, default=12,
+                        metavar='N', help='The minimum length of a sequence.')
+    parser.add_argument('--max_sequence_len', type=int, default=512,
+                        metavar='N', help='The maximum length of a sequence.')
+    parser.add_argument('--do_tokenize', action='store_true',
+                        help='Whether to tokenize the input.')
+    parser.add_argument('--do_lower_case', action='store_true',
+                        help='Whether to lowercase the input when tokenizing.')
+    parser.add_argument('-n', '--num_epochs', type=int, default=3,
+                        metavar='N', help='The number of distillation epochs.')
+    parser.add_argument('-b', '--batch_size', type=int,
+                        default=5, metavar='N', help='The batch size.')
+    parser.add_argument('--lr', '--learning_rate', type=float,
+                        default=5e-4, metavar='F', help='The initial learning rate.')
+    parser.add_argument('--epsilon', type=float, default=1e-6,
+                        metavar='F', help="Adam's epsilon.")
+    parser.add_argument('--warmup_prop', type=float, default=0.05,
+                        metavar='F', help='Linear warmup proportion.')
+    parser.add_argument('--num_gradient_accumulation_steps', type=int, default=50, metavar='N',
+                        help='The number of gradient accumulation steps (for larger batch sizes).')
+    parser.add_argument('--max_gradient_norm', type=float,
+                        default=5.0, metavar='F', help='The maximum gradient norm.')
+    parser.add_argument('--seed', type=int, default=42,
+                        metavar='N', help='Random seed.')
+    parser.add_argument('-c', '--use_cuda', action='store_true',
+                        help='Whether to use cuda or not.')
+    parser.add_argument('-d', '--use_distributed', action='store_true',
+                        help='Whether to use distributed training (distillation) or not.')
     parser.add_argument('--local_rank', type=int, default=-1,
-                        metavar='N', help='Local process rank')
+                        metavar='N', help='Local process rank.')
     params = parser.parse_args()
     params.is_master = params.local_rank == 0
 
     # initialize multi-GPU
-    if params.is_master:
-        logger.info('Initializing PyTorch distributed')
-    torch.cuda.set_device(params.local_rank)
-    torch.distributed.init_process_group(backend='nccl', init_method='env://')
+    if params.use_distributed:
+        if params.is_master:
+            logger.info('Initializing PyTorch distributed')
+        torch.cuda.set_device(params.local_rank)
+        torch.distributed.init_process_group(
+            backend='nccl', init_method='env://')
 
     # set seed(s)
     if params.is_master:
         logger.info('Setting random seed(s)')
-    np.random.seed(SEED)
-    torch.manual_seed(SEED)
-    torch.cuda.manual_seed_all(SEED)
-
-    # root dir
-    root = Path(__file__).resolve().parent
+    np.random.seed(params.seed)
+    torch.manual_seed(params.seed)
+    if params.use_distributed:
+        torch.cuda.manual_seed_all(params.seed)
 
     # initialize the student
     if params.is_master:
         logger.info('Initializing the student')
-    student_config_file = root / 'config.json'
-    student_weights_file = root / 'weights.pth'
-    student_config = DistilBertConfig.from_pretrained(student_config_file)
-    student = DistilBertForMaskedLM.from_pretrained(
-        student_weights_file, config=student_config)
+    student_config = DistilBertConfig.from_pretrained(
+        params.student_config_file)
+    student_config.output_hidden_states = True
+    if params.student_weights_file is not None:
+        student = DistilBertForMaskedLM.from_pretrained(
+            params.student_weights_file,
+            config=student_config
+        )
+    else:
+        student = DistilBertForMaskedLM(student_config)
 
     # initialize the teacher
     if params.is_master:
         logger.info('Initializing the teacher')
-    teacher = BertForMaskedLM.from_pretrained('bert-base-uncased')
+    teacher = BertForMaskedLM.from_pretrained(
+        params.teacher_type, output_hidden_states=True)
 
     # initialize the tokenizer
     if params.is_master:
         logger.info('Initializing the tokenizer')
-    tokenizer = BertWordPieceTokenizer(str(root / 'vocab.txt'))
+    tokenizer = BertWordPieceTokenizer(
+        params.tokenizer_vocab_file, lowercase=params.do_lowercase)
 
     # initialize the dataset
     if params.is_master:
         logger.info('Initializing the dataset')
     dataset = LanguageModelingDataset(
-        path=root / 'small.txt',
+        path=params.data_file,
         tokenizer=tokenizer,
-        do_tokenize=True,
-        min_sequence_len=MIN_SEQUENCE_LEN,
-        max_sequence_len=MAX_SEQUENCE_LEN
+        do_tokenize=params.do_tokenize,
+        min_sequence_len=params.min_sequence_len,
+        max_sequence_len=params.max_sequence_len
     )
 
     # initialize the sampler
     if params.is_master:
         logger.info('Initializing the sampler')
-    group_bins = list(range(3, dataset.max_sequence_len, 4))
+    group_bins = list(range(3, params.max_sequence_len, 4))
     group_idxs = quantize(dataset.lengths, group_bins)
-    base_sampler = DistributedSampler(dataset)
+    base_sampler = DistributedSampler(
+        dataset) if params.use_distributed else RandomSampler(dataset)
     sampler = GroupedBatchSampler(
         sampler=base_sampler,
         group_idxs=group_idxs,
-        batch_size=BATCH_SIZE,
+        batch_size=params.batch_size,
         drop_last=False
     )
 
@@ -120,64 +170,47 @@ def main():
     # initialize the loss function
     if params.is_master:
         logger.info('Initializing the loss function')
-    loss_fn = KDLoss(temperature=TEMPERATURE, reduction='batchmean')
+    loss_fn = SanhLoss(reduction=('batchmean', 'mean', 'mean'))
 
-    def loss_fn_wrapper(input, target):
-        return loss_fn(input[0], target[0])
-
-    # initialize the optimizer
+    # compute token counts
     if params.is_master:
-        logger.info('Initializing the optimizer')
-    no_decay = ['bias', 'LayerNorm.weight']
-    optimizer_grouped_parameters = [
-        {
-            'params': [p for n, p in student.named_parameters() if not any(nd in n for nd in no_decay) and p.requires_grad],
-            'weight_decay': WEIGHT_DECAY
-        }, {
-            'params': [p for n, p in student.named_parameters() if any(nd in n for nd in no_decay) and p.requires_grad],
-            'weight_decay': 0.0
-        }
-    ]
-    optimizer = AdamW(
-        optimizer_grouped_parameters,
-        lr=LEARNING_RATE,
-        betas=(0.9, 0.98),
-        eps=EPSILON
-    )
+        logger.info('Computing token counts')
+    counter = Counter()
+    for sequence in dataset.sequences:
+        counter.update(sequence)
+    token_counts = [0] * dataset._tokenizer.get_vocab_size()
+    for k, v in counter.items():
+        token_counts[k] = v
+    del counter
 
-    # initialize the scheduler
+    # compute token probabilities
     if params.is_master:
-        logger.info('Initializing the scheduler')
-    n_steps_epoch = len(dataloader)
-    n_train_steps = int(
-        n_steps_epoch / N_GRAD_ACCUMULATION_STEPS * N_EPOCHS) + 1
-    n_warmup_steps = math.ceil(n_train_steps * WARMUP_PROP)
+        logger.info('Computing token probabilities')
+    token_probabilities = np.maximum(token_counts, 1) ** -0.7
 
-    def lr_lambda(current_step):
-        if current_step < n_warmup_steps:
-            return float(current_step) / float(max(1, n_warmup_steps))
-        return max(0.0, float(n_train_steps - current_step) / float(max(1, n_train_steps - n_warmup_steps)))
-    scheduler = LambdaLR(
-        optimizer=optimizer,
-        lr_lambda=lr_lambda,
-        last_epoch=-1
-    )
+    # give special tokens a zero probability
+    for idx in dataset.special_tokens_map.values():
+        token_probabilities[idx] = 0.0
+
+    # convert to torch.FloatTensor
+    token_probabilities = torch.FloatTensor(token_probabilities)
 
     # initialize the distiller
     if params.is_master:
         logger.info('Initializing the distiller')
-    distiller = DistributedDistiller(
+    distiller = SanhDistiller(
         student=student,
         teacher=teacher,
         dataloader=dataloader,
-        loss_fn=loss_fn_wrapper,
-        optimizer=optimizer,
-        num_epochs=N_EPOCHS,
+        token_probabilities=token_probabilities,
+        loss_fn=loss_fn,
+        num_epochs=params.num_epochs,
+        num_gradient_accumulation_steps=params.num_gradient_accumulation_steps,
+        max_gradient_norm=params.max_gradient_norm,
+        use_cuda=params.use_cuda,
         local_rank=params.local_rank,
+        use_distributed=params.use_distributed,
         is_master=params.is_master,
-        num_gradient_accumulation_steps=N_GRAD_ACCUMULATION_STEPS,
-        max_gradient_norm=MAX_GRAD_NORM,
-        scheduler=scheduler,
         use_tqdm=True,
         logger=logger,
     )
