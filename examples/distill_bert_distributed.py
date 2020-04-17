@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 import json
 import logging
-import math
-import os
+import random
 from argparse import ArgumentParser
 from collections import Counter
 from pathlib import Path
@@ -11,8 +10,6 @@ from pathlib import Path
 import numpy as np
 import torch
 from tokenizers import BertWordPieceTokenizer
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader, DistributedSampler, RandomSampler
 from transformers import (BertForMaskedLM, DistilBertConfig,
                           DistilBertForMaskedLM)
@@ -92,19 +89,19 @@ def main():
     params.is_master = params.local_rank == 0
 
     # make output_dir
-    
     if Path(params.output_dir).is_dir() and not params.force:
-            raise ValueError(f'Output directory {params.output_dir} already exists. Use `--force` if you want to overwrite it.')
+        raise ValueError(
+            f'Output directory {params.output_dir} already exists. Use `--force` if you want to overwrite it.')
     if params.is_master:
         Path(params.output_dir).mkdir(parents=True, exist_ok=params.force)
 
-    # dump params
-    json.dump(
-        vars(params),
-        open(Path(params.output_dir) / 'params.json', 'w'),
-        indent=4,
-        sort_keys=True
-    )
+        # dump params
+        json.dump(
+            vars(params),
+            open(Path(params.output_dir) / 'params.json', 'w'),
+            indent=4,
+            sort_keys=True
+        )
     params.output_dir = Path(params.output_dir)
 
     # initialize multi-GPU
@@ -118,6 +115,7 @@ def main():
     # set seed(s)
     if params.is_master:
         logger.info('Setting random seed(s)')
+    random.seed(params.seed)
     np.random.seed(params.seed)
     torch.manual_seed(params.seed)
     if params.use_distributed:
@@ -165,10 +163,8 @@ def main():
         logger.info('Initializing the sampler')
     group_bins = list(range(3, params.max_sequence_len, 4))
     group_idxs = quantize(dataset.lengths, group_bins)
-    base_sampler = DistributedSampler(
-        dataset) if params.use_distributed else RandomSampler(dataset)
     sampler = GroupedBatchSampler(
-        sampler=base_sampler,
+        sampler=DistributedSampler(dataset) if params.use_distributed else RandomSampler(dataset),
         group_idxs=group_idxs,
         batch_size=params.batch_size,
         drop_last=False
@@ -245,8 +241,19 @@ def main():
 
     # save the student model weights
     if params.is_master:
+        logger.info('Saving the student model config')
+        json.dump(
+            vars(student.config),
+            open(params.output_dir / 'distilled_bert_config.json', 'w'),
+            indent=4,
+            sort_keys=True
+        )
+
         logger.info('Saving the student model weights')
-        torch.save(student.state_dict(), params.output_dir / 'distilled_bert.pth')
+        torch.save(
+            student.state_dict(),
+            params.output_dir / 'distilled_bert_weights.pth'
+        )
 
 
 if __name__ == '__main__':
