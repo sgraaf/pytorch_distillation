@@ -17,7 +17,7 @@ from torch.optim.lr_scheduler import _LRScheduler as LRScheduler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from .loss import DistillationLoss, SanhLoss
+from .loss import HintonLoss, SanhLoss
 
 
 class Distiller(object):
@@ -84,7 +84,7 @@ class Distiller(object):
         if self.use_distributed:
             self.student = DDP(
                 self.student,
-                device_idxs=[self.local_rank],
+                device_ids=[self.local_rank],
                 output_device=self.local_rank
             )
 
@@ -92,6 +92,9 @@ class Distiller(object):
         # put student in train mode and teacher in eval mode
         self.student.train()
         self.teacher.eval()
+
+        # keep track of the last loss
+        self.last_loss = 0
 
         for epoch in range(self.num_epochs):
             # synchronize all processes
@@ -127,6 +130,7 @@ class Distiller(object):
 
                 # compute the loss
                 loss = self.loss_fn(student_logits, teacher_logits, target)
+                self.last_loss = loss.item()
 
                 if self.use_distributed:
                     loss = loss.mean()
@@ -156,7 +160,7 @@ class Distiller(object):
                 # update the progress bar
                 if self.use_tqdm:
                     pbar.update()
-                    pbar.set_postfix({'last_loss': loss.item()})
+                    pbar.set_postfix({'last_loss': self.last_loss})
 
             # close the progress bar
             if self.use_tqdm:
@@ -224,7 +228,7 @@ class HintonDistiller(Distiller):
             logger,
         )
         if self.loss_fn is None:
-            self.loss_fn = DistillationLoss()
+            self.loss_fn = HintonLoss()
 
         if self.optimizer is None:
             self.optimizer = optim.SGD(
@@ -347,6 +351,9 @@ class SanhDistiller(Distiller):
         self.student.train()
         self.teacher.eval()
 
+        # keep track of the last loss
+        self.last_loss = 0
+
         for epoch in range(self.num_epochs):
             # synchronize all processes
             if self.use_distributed:
@@ -398,10 +405,10 @@ class SanhDistiller(Distiller):
                     -1, student_logits.size(-1))
 
                 # select and reshape the hidden states
-                hidden_states_mask = attention_mask.unsqueeze(
-                    -1).expand_as(student_hidden_states)
                 student_hidden_states = student_hidden_states[-1]
                 teacher_hidden_states = teacher_hidden_states[-1]
+                hidden_states_mask = attention_mask.unsqueeze(
+                    -1).expand_as(student_hidden_states)
                 student_hidden_states_masked = torch.masked_select(
                     student_hidden_states, hidden_states_mask)
                 teacher_hidden_states_masked = torch.masked_select(
@@ -425,6 +432,7 @@ class SanhDistiller(Distiller):
                     target1=mlm_target.view(-1),
                     target2=cosine_emb_target
                 )
+                self.last_loss = loss.item()
 
                 if self.use_distributed:
                     loss = loss.mean()
@@ -454,7 +462,7 @@ class SanhDistiller(Distiller):
                 # update the progress bar
                 if self.use_tqdm:
                     pbar.update()
-                    pbar.set_postfix({'last_loss': loss.item()})
+                    pbar.set_postfix({'last_loss': self.last_loss})
 
             # close the progress bar
             if self.use_tqdm:

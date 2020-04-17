@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+import json
 import logging
 import math
 import os
@@ -20,9 +21,11 @@ from torch_distillation import (GroupedBatchSampler, LanguageModelingDataset,
                                 SanhDistiller, SanhLoss, quantize)
 
 # initialize the logger
-logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s - PID: %(process)d -  %(message)s',
-                    datefmt='%Y%m%d %H:%M:%S',
-                    level=logging.INFO)
+logging.basicConfig(
+    format='%(asctime)s - %(levelname)s - %(name)s - PID: %(process)d -  %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # suppress transformers logging
@@ -68,6 +71,12 @@ def main():
                         help='The number of gradient accumulation steps (for larger batch sizes).')
     parser.add_argument('--max_gradient_norm', type=float,
                         default=5.0, metavar='F', help='The maximum gradient norm.')
+    parser.add_argument('--soft_target_alpha', type=float, default=0.33,
+                        metavar='F', help='The relative weight of the soft target loss.')
+    parser.add_argument('--hard_target_alpha', type=float, default=0.33,
+                        metavar='F', help='The relative weight of the hard target loss.')
+    parser.add_argument('--cosine_emb_alpha', type=float, default=0.33,
+                        metavar='F', help='The relative weight of the cosine embedding loss.')
     parser.add_argument('--seed', type=int, default=42,
                         metavar='N', help='Random seed.')
     parser.add_argument('-c', '--use_cuda', action='store_true',
@@ -77,7 +86,26 @@ def main():
     parser.add_argument('--local_rank', type=int, default=-1,
                         metavar='N', help='Local process rank.')
     params = parser.parse_args()
+
+    if not params.use_distributed:
+        params.local_rank = 0
     params.is_master = params.local_rank == 0
+
+    # make output_dir
+    
+    if Path(params.output_dir).is_dir() and not params.force:
+            raise ValueError(f'Output directory {params.output_dir} already exists. Use `--force` if you want to overwrite it.')
+    if params.is_master:
+        Path(params.output_dir).mkdir(parents=True, exist_ok=params.force)
+
+    # dump params
+    json.dump(
+        vars(params),
+        open(Path(params.output_dir) / 'params.json', 'w'),
+        indent=4,
+        sort_keys=True
+    )
+    params.output_dir = Path(params.output_dir)
 
     # initialize multi-GPU
     if params.use_distributed:
@@ -119,7 +147,7 @@ def main():
     if params.is_master:
         logger.info('Initializing the tokenizer')
     tokenizer = BertWordPieceTokenizer(
-        params.tokenizer_vocab_file, lowercase=params.do_lowercase)
+        params.tokenizer_vocab_file, lowercase=params.do_lower_case)
 
     # initialize the dataset
     if params.is_master:
@@ -158,7 +186,14 @@ def main():
     # initialize the loss function
     if params.is_master:
         logger.info('Initializing the loss function')
-    loss_fn = SanhLoss(reduction=('batchmean', 'mean', 'mean'))
+    loss_fn = SanhLoss(
+        alphas=(
+            params.soft_target_alpha,
+            params.hard_target_alpha,
+            params.cosine_emb_alpha
+        ),
+        reduction=('batchmean', 'mean', 'mean')
+    )
 
     # compute token counts
     if params.is_master:
@@ -211,7 +246,7 @@ def main():
     # save the student model weights
     if params.is_master:
         logger.info('Saving the student model weights')
-        torch.save(student.state_dict(), './distilled_bert.pth')
+        torch.save(student.state_dict(), params.output_dir / 'distilled_bert.pth')
 
 
 if __name__ == '__main__':
