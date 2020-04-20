@@ -15,7 +15,8 @@ from transformers import (BertForMaskedLM, DistilBertConfig,
                           DistilBertForMaskedLM)
 
 from torch_distillation import (GroupedBatchSampler, LanguageModelingDataset,
-                                SanhDistiller, SanhLoss, quantize)
+                                SanhDistiller, SanhLoss)
+from torch_distillation.data import quantize
 
 # initialize the logger
 logging.basicConfig(
@@ -250,8 +251,9 @@ def main():
         )
 
         logger.info('Saving the student model weights')
+        model_to_save = student.module if hasattr(student, 'module') else student  # Take care of distributed/parallel training
         torch.save(
-            student.state_dict(),
+            model_to_save.state_dict(),
             params.output_dir / 'distilled_bert_weights.pth'
         )
 

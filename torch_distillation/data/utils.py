@@ -4,7 +4,9 @@
 """
 import bisect
 import copy
-from typing import Any, Iterable, List, Sequence, Tuple
+import csv
+from pathlib import Path
+from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
 
 def chunk(l: Sequence[Any], n: int) -> Tuple[Sequence[Any]]:
@@ -36,3 +38,25 @@ def quantize(l: Sequence[int], bins: List[int]) -> List[int]:
     quantized_l = list(map(lambda y: bisect.bisect_right(bins, y), l))
 
     return quantized_l
+
+def read_csv(file: Path, encoding: Optional[str] = 'utf-8', delimiter: Optional[str] = ',', quotechar: Optional[str] = None):
+    """Reads a comma-separated value (CSV) file.
+    
+    Args:
+        file: The path to the CSV-file.
+        encoding: The encoding used to decode the bytes.
+        delimiter: The character used to seperate the fields.
+        quotechar: The character used to quote fields containing special characters.
+    """
+    with open(file, 'r', encoding=encoding) as f:
+        return list(csv.reader(f, delimiter=delimiter, quotechar=quotechar))
+
+def read_tsv(file: Path, encoding: Optional[str] = 'utf-8', quotechar: Optional[str] = None):
+    """Reads a tab-separated value (TSV) file.
+    
+    Args:
+        file: The path to the TSV-file.
+        encoding: The encoding used to decode the bytes.
+        quotechar: The character used to quote fields containing special characters.
+    """
+    return read_csv(file, encoding=encoding, delimiter='\t', quotechar=quotechar)

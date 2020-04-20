@@ -9,9 +9,9 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import torch
 from tokenizers import Tokenizer
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, TensorDataset
 
-from .utils import chunk
+from .utils import chunk, read_tsv
 
 
 class LanguageModelingDataset(Dataset):
@@ -37,7 +37,7 @@ class LanguageModelingDataset(Dataset):
         min_sequence_len: Optional[int] = 12,
         max_sequence_len: Optional[int] = 512
     ) -> None:
-        self._path = path
+        self._path = Path(path)
         self._tokenizer = tokenizer
         self.min_sequence_len = min_sequence_len
         self.max_sequence_len = max_sequence_len
@@ -159,3 +159,189 @@ class LanguageModelingDataset(Dataset):
 
         # convert to torch.LongTensors
         return torch.LongTensor(padded_sequences), torch.LongTensor(lengths)
+
+
+GLUE_TASKS_MAPPING = {
+    'CoLA': {
+        'idxs': {
+            'sequence_a': 3,
+            'sequence_b': None,
+            'label': 1
+        }, 'labels': {
+            '0': 0,
+            '1': 1
+        }, 'type': 'classification'
+    }, 'MNLI': {
+        'idxs': {
+            'sequence_a': 8,
+            'sequence_b': 9,
+            'label': -1
+        }, 'labels': {
+            '0': 0,
+            '1': 1
+        }, 'type': 'classification'
+    }, 'MNLI-MM': {
+        'idxs': {
+            'sequence_a': 8,
+            'sequence_b': 9,
+            'label': -1
+        }, 'labels': {
+            '0': 0,
+            '1': 1
+        }, 'type': 'classification'
+    }, 'MRPC': {
+        'idxs': {
+            'sequence_a': 3,
+            'sequence_b': 4,
+            'label': 0
+        }, 'labels': {
+            'contradiction': 0,
+            'entailment': 1,
+            'neutral': 2
+        }, 'type': 'classification'
+    }, 'SST-2': {
+        'idxs': {
+            'sequence_a': 0,
+            'sequence_b': None,
+            'label': 1
+        }, 'labels': {
+            '0': 0,
+            '1': 1
+        }, 'type': 'classification'
+    }, 'STS-B': {
+        'idxs': {
+            'sequence_a': 7,
+            'sequence_b': 8,
+            'label': -1
+        }, 'labels': [None],
+        'type': 'regression'
+    }, 'QQP': {
+        'idxs': {
+            'sequence_a': 3,
+            'sequence_b': 4,
+            'label': 5
+        }, 'labels': {
+            '0': 0,
+            '1': 1
+        }, 'type': 'classification'
+    }, 'QNLI': {
+        'idxs': {
+            'sequence_a': 1,
+            'sequence_b': 2,
+            'label': -1
+        }, 'labels': {
+            'entailment': 0,
+            'not_entailment': 1
+        }, 'type': 'classification'
+    }, 'RTE': {
+        'idxs': {
+            'sequence_a': 1,
+            'sequence_b': 2,
+            'label': -1
+        }, 'labels': {
+            'entailment': 0,
+            'not_entailment': 1
+        }, 'type': 'classification'
+    }, 'WNLI': {
+        'idxs': {
+            'sequence_a': 1,
+            'sequence_b': 2,
+            'label': -1
+        }, 'labels': {
+            '0': 0,
+            '1': 1
+        }, 'type': 'classification'
+    }
+}
+GLUE_TASKS = [*GLUE_TASKS_MAPPING]
+
+
+class GLUETaskDataset(TensorDataset):
+    """
+    Dataset class for GLUE tasks. 
+    Adapted (in part) from Hugging Face, Inc. (https://github.com/huggingface/transformers/tree/master/examples/run_glue.py)
+
+    Args:
+        task: The GLUE task.
+        dir: The path to the directory containing the GLUE task data.
+        split: The data split (train, dev or test) to load.
+        tokenizer: The tokenizer.
+        encoding: The encoding used to decode the bytes. (default: 'utf-8')
+        quotechar: The character used to quote special characters. (default: None)
+    """
+
+    def __init__(
+        self,
+        task: str,
+        dir: Union[str, Path],
+        split: str,
+        tokenizer: Tokenizer,
+        encoding: Optional[str] = 'utf-8',
+        quotchar: Optional[str] = None
+    ) -> None:
+        self.task = task
+        self._dir = Path(dir)
+        self.split = split
+        self._tokenizer = tokenizer
+
+        # get the path to the file containing the data
+        if self.task == 'MNLI' and self.split == 'dev':
+            self.split += '_matched'
+        elif self.task == 'MNLI-MM' and self.split == 'dev':
+            self.split += '_mismatched'
+        
+        self._path = self._dir / f'{self.split}.tsv'
+        if not self._path.exists():
+            raise FileNotFoundError(
+                f'{self.task} GLUE task {self.split} data file not found: {str(self._path)}')
+
+        # get the mapping
+        self.mapping = GLUE_TASKS_MAPPING[self.task]
+
+        # load the data
+        data = read_tsv(self._path, encoding=encoding, quotechar=quotchar)
+        if self.task != 'CoLA':
+            data = data[1:]
+
+        # convert data to sequences (pairs) and labels
+        self.sequences = []
+        self.labels = []
+        for line in data:
+            # first sequence
+            sequence_a = line[self.mapping['idxs']['sequence_a']]
+
+            # second sequence (optional)
+            if self.mapping['idxs']['sequence_b'] is not None:
+                sequence_b = line[self.mapping['idxs']['sequence_b']]
+                self.sequences.append((sequence_a, sequence_b))
+            else:
+                self.sequences.append(sequence_a)
+
+            # label
+            label = line[self.mapping['idxs']['label']]
+            if self.mapping['type'] == 'classification':
+                label = self.mapping['labels'][label]
+            elif self.mapping['type'] == 'regression':
+                label = float(label)
+
+            self.labels.append(label)
+
+        # tokenize the sequences (pairs)
+        encoded_sequences = self._tokenizer.encode_batch(self.sequences)
+        self.sequences = [
+            encoded_sequence.ids for encoded_sequence in encoded_sequences]
+        self.attention_masks = [
+            encoded_sequence.attention_mask for encoded_sequence in encoded_sequences]
+
+        # convert to torch tensors
+        self.sequences = torch.tensor(self.sequences, dtype=torch.long)
+        self.attention_masks = torch.tensor(self.attention_masks, dtype=torch.long)
+        if self.mapping['type'] == 'classification':
+            self.labels = torch.tensor(self.labels, dtype=torch.long)
+        else:
+            self.labels = torch.tensor(self.labels, dtype=torch.float)
+
+        if not self.sequences.size(0) == self.attention_masks.size(0) == self.labels.size(0):
+            raise ValueError('The sequences, attention masks and labels are of unequal size.')
+
+        self.tensors = (self.sequences, self.attention_masks, self.labels)

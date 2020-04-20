@@ -1,16 +1,18 @@
-from .data import GroupedBatchSampler, LanguageModelingDataset, chunk, quantize
+from .data import (GLUE_TASKS, GLUE_TASKS_MAPPING, GLUETaskDataset,
+                   GroupedBatchSampler, LanguageModelingDataset)
 from .distiller import Distiller, HintonDistiller, SanhDistiller
 from .loss import HintonLoss, SanhLoss, SoftTargetLoss
 
 __version__ = '0.0.1'
 __all__ = [
-    'chunk',
     'Distiller',
+    'GLUE_TASKS',
+    'GLUE_TASKS_MAPPING',
+    'GLUETaskDataset',
     'GroupedBatchSampler',
-    'HintonDistiller'
+    'HintonDistiller',
     'HintonLoss',
     'LanguageModelingDataset',
-    'quantize',
     'SanhDistiller',
     'SanhLoss',
     'SoftTargetLoss'
