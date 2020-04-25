@@ -88,7 +88,7 @@ def train(
             torch.distributed.barrier()
 
         if is_master and logger is not None:
-            logger.info(f'Starting with epoch {epoch+1}/{num_epochs}')
+            logger.info(f'{task} - Starting with epoch {epoch+1}/{num_epochs}')
 
         # initialize the progress bar
         if use_tqdm:
@@ -96,7 +96,6 @@ def train(
                 desc=f'Training {task} [epoch {epoch+1}/{num_epochs}]',
                 total=len(dataloader),
                 unit='batch',
-                leave=False,
             )
 
         for step, batch in enumerate(dataloader):
@@ -111,7 +110,10 @@ def train(
 
             # forward pass (loss computation included)
             outputs = model(
-                sequences, attention_mask=attention_masks, labels=labels)
+                input_ids=sequences,
+                attention_mask=attention_masks,
+                labels=labels
+            )
             loss = outputs[0]
             last_loss = loss.item()
 
@@ -165,7 +167,7 @@ def evaluate(
     num_eval_steps = 0
     eval_loss = 0
     predictions = np.empty((0, model.num_labels))
-    targets = np.empty((0, 1))
+    targets = np.empty((0,))
 
     # initialize the progress bar
     if use_tqdm:
@@ -173,7 +175,6 @@ def evaluate(
             desc=f'Evaluating {task}',
             total=len(dataloader),
             unit='batch',
-            leave=False,
         )
 
     for step, batch in enumerate(dataloader):
@@ -189,15 +190,25 @@ def evaluate(
         with torch.no_grad():
             # forward pass (loss compution included)
             outputs = model(
-                sequences, attention_mask=attention_masks, labels=labels)
+                input_ids=sequences,
+                attention_mask=attention_masks,
+                labels=labels
+            )
             loss, logits = outputs[:2]
 
         # update metrics
         eval_loss += loss.mean().item()
         num_eval_steps += 1
         predictions = np.append(
-            predictions, logits.detach().cpu().numpy(), axis=0)
-        targets = np.append(targets, labels.detach().cpu().numpy(), axis=0)
+            arr=predictions,
+            values=logits.detach().cpu().numpy(),
+            axis=0
+        )
+        targets = np.append(
+            arr=targets,
+            values=labels.detach().cpu().numpy(),
+            axis=0
+        )
 
         # update the progress bar
         if use_tqdm:
@@ -240,30 +251,30 @@ def main():
                         help='Whether to run eval (on the dev set).')
     parser.add_argument('--config_file', type=str, metavar='PATH',
                         required=True, help='Path to the model configuration.')
-    parser.add_argument('--weights_file', type=str, default=None, metavar='PATH',
+    parser.add_argument('--weights_file', type=str, metavar='PATH',
                         required=True, help='Path to the model initialization weights.')
     parser.add_argument('--tokenizer_vocab_file', type=str, metavar='PATH',
                         required=True, help='Path to the tokenizer vocabulary.')
-    parser.add_argument('--max_sequence_len', type=int, default=512,
+    parser.add_argument('--max_sequence_len', type=int, default=128,
                         metavar='N', help='The maximum length of a sequence.')
     parser.add_argument('--do_lower_case', action='store_true',
                         help='Whether to lowercase the input when tokenizing.')
     parser.add_argument('-n', '--num_epochs', type=int, default=3,
                         metavar='N', help='The number of distillation epochs.')
     parser.add_argument('--train_batch_size', type=int,
-                        default=5, metavar='N', help='The batch size used during training.')
+                        default=8, metavar='N', help='The batch size used during training.')
     parser.add_argument('--eval_batch_size', type=int,
-                        default=5, metavar='N', help='The batch size used during evaluation.')
-    parser.add_argument('--lr', '--learning_rate', type=float,
-                        default=5e-4, metavar='F', help='The initial learning rate.')
-    parser.add_argument('--epsilon', type=float, default=1e-6,
+                        default=8, metavar='N', help='The batch size used during evaluation.')
+    parser.add_argument('-lr', '--learning_rate', type=float,
+                        default=2e-5, metavar='F', help='The initial learning rate.')
+    parser.add_argument('--epsilon', type=float, default=1e-8,
                         metavar='F', help="Adam's epsilon.")
     parser.add_argument('--warmup_prop', type=float, default=0.05,
                         metavar='F', help='Linear warmup proportion.')
-    parser.add_argument('--num_gradient_accumulation_steps', type=int, default=50, metavar='N',
+    parser.add_argument('--num_gradient_accumulation_steps', type=int, default=1, metavar='N',
                         help='The number of gradient accumulation steps (for larger batch sizes).')
     parser.add_argument('--max_gradient_norm', type=float,
-                        default=5.0, metavar='F', help='The maximum gradient norm.')
+                        default=1.0, metavar='F', help='The maximum gradient norm.')
     parser.add_argument('--seed', type=int, default=42,
                         metavar='N', help='Random seed.')
     parser.add_argument('-c', '--use_cuda', action='store_true',
@@ -332,18 +343,14 @@ def main():
         # prepare the GLUE task
         if params.is_master:
             logger.info(f'Preparing the {task} GLUE task')
-        task_data_dir = params.glue_dir / task
-        if not task_data_dir.is_dir():
-            raise FileNotFoundError(
-                f'GLUE task data directory not found: {str(task_data_dir)}')
-        task_num_labels = len(GLUE_TASKS_MAPPING[task]['labels'])
+        task_dir = params.glue_dir / task
 
         # initialize the model
         if params.is_master:
-            logger.info('Initializing the model')
+            logger.info(f'{task} - Initializing the model')
         config = DistilBertConfig.from_pretrained(
             params.config_file,
-            num_labels=task_num_labels,
+            num_labels=len(GLUE_TASKS_MAPPING[task]['labels']),
             finetuning_task=task
         )
         model = DistilBertForSequenceClassification.from_pretrained(
@@ -355,35 +362,26 @@ def main():
         if params.use_cuda:
             model = model.to(f'cuda:{params.local_rank}')
 
-        # initialize distributed data parallel (DDP)
-        if params.use_distributed:
-            model = DDP(
-                model,
-                device_ids=[params.local_rank],
-                output_device=params.local_rank
-            )
-
-        # initialize the training objects
+        # perform the training
         if params.do_train:
             # initialize the training dataset
             if params.is_master:
-                logger.info('Initializing the training dataset')
+                logger.info(f'{task} - Initializing the training dataset')
             train_dataset = GLUETaskDataset(
                 task=task,
-                dir=task_data_dir,
+                dir=task_dir,
                 split='train',
                 tokenizer=tokenizer
             )
 
             # initialize the sampler
             if params.is_master:
-                logger.info('Initializing the training sampler')
-            train_sampler = DistributedSampler(
-                train_dataset) if params.use_distributed else RandomSampler(train_dataset)
+                logger.info(f'{task} - Initializing the training sampler')
+            train_sampler = DistributedSampler(train_dataset) if params.use_distributed else RandomSampler(train_dataset)
 
             # initialize the dataloader
             if params.is_master:
-                logger.info('Initializing the training dataloader')
+                logger.info(f'{task} - Initializing the training dataloader')
             train_dataloader = DataLoader(
                 dataset=train_dataset,
                 sampler=train_sampler,
@@ -392,7 +390,7 @@ def main():
 
             # initialize the optimizer
             if params.is_master:
-                logger.info('Initializing the optimizer')
+                logger.info(f'{task} - Initializing the optimizer')
             optimizer = optim.Adam(
                 model.parameters(),
                 lr=params.learning_rate,
@@ -402,10 +400,9 @@ def main():
 
             # initialize the learning rate scheduler
             if params.is_master:
-                logger.info('Initializing the learning rate scheduler')
+                logger.info(f'{task} - Initializing the learning rate scheduler')
             num_steps_epoch = len(train_dataloader)
-            num_train_steps = math.ceil(
-                num_steps_epoch / params.num_gradient_accumulation_steps * params.num_epochs)
+            num_train_steps = math.ceil(num_steps_epoch / params.num_gradient_accumulation_steps * params.num_epochs)
             num_warmup_steps = math.ceil(num_train_steps * params.warmup_prop)
 
             def lr_lambda(current_step):
@@ -419,9 +416,17 @@ def main():
                 last_epoch=-1
             )
 
+            # initialize distributed data parallel (DDP)
+            if params.use_distributed:
+                model = DDP(
+                    model,
+                    device_ids=[params.local_rank],
+                    output_device=params.local_rank
+                )
+
             # start training
             if params.is_master:
-                logger.info('Starting the training')
+                logger.info(f'{task} - Starting the training')
             train(
                 task=task,
                 model=model,
@@ -442,47 +447,65 @@ def main():
             # save the finetuned model
             if params.is_master:
                 # take care of distributed training
-                model_to_save = model.module if hasattr(
-                    model, 'module') else model
+                model_to_save = model.module if hasattr(model, 'module') else model
+                model_to_save.config.architectures = [model_to_save.__class__.__name__]
 
-                logger.info('Saving the finetuned model config')
+                logger.info(f'{task} - Saving the finetuned model config')
                 json.dump(
                     vars(model_to_save.config),
-                    open(
-                        params.output_dir / f'{model_to_save.__class__.__name__}_{task}_config.json', 'w'),
+                    open(params.output_dir / f'{model_to_save.__class__.__name__}_{task}_config.json', 'w'),
                     indent=4,
                     sort_keys=True
                 )
 
-                logger.info('Saving the finetuned model weights')
+                logger.info(f'{task} - Saving the finetuned model weights')
                 torch.save(
                     model_to_save.state_dict(),
-                    params.output_dir /
-                    f'{model_to_save.__class__.__name__}_{task}_weights.pth'
+                    params.output_dir / f'{model_to_save.__class__.__name__}_{task}_weights.pth'
                 )
 
-        # get the eval dataset
+                # reload the model
+                if params.do_eval:
+                    if params.is_master:
+                        logger.info(f'{task} - Reloading the model')
+                    config = DistilBertConfig.from_pretrained(
+                        str(params.output_dir / f'{model_to_save.__class__.__name__}_{task}_config.json'),
+                        num_labels=len(GLUE_TASKS_MAPPING[task]['labels']),
+                        finetuning_task=task
+                    )
+                    model = DistilBertForSequenceClassification.from_pretrained(
+                        str(params.output_dir / f'{model_to_save.__class__.__name__}_{task}_weights.pth'),
+                        config=config
+                    )
+
+                    if params.use_cuda:
+                        model = model.to(f'cuda:{params.local_rank}')
+
+        # perform the evaluation
         if params.do_eval and params.is_master:
-            logger.info('Initializing the evaluation dataset')
+            logger.info(f'{task} - Initializing the evaluation dataset')
             eval_dataset = GLUETaskDataset(
                 task=task,
-                dir=task_data_dir,
+                dir=task_dir,
                 split='dev',
                 tokenizer=tokenizer
             )
 
             # initialize the sampler
-            logger.info('Initializing the evaluation sampler')
+            logger.info(f'{task} - Initializing the evaluation sampler')
             eval_sampler = SequentialSampler(eval_dataset)
 
             # initialize the dataloader
-            logger.info('Initializing the evaluation dataloader')
+            logger.info(f'{task} - Initializing the evaluation dataloader')
             eval_dataloader = DataLoader(
                 dataset=eval_dataset,
                 sampler=eval_sampler,
                 batch_size=params.eval_batch_size
             )
 
+            # start training
+            if params.is_master:
+                logger.info(f'{task} - Starting the evaluation')
             results = evaluate(
                 task=task,
                 model=model,
@@ -493,15 +516,14 @@ def main():
             )
 
             # log results
-            logger.info('Evaluation results:')
+            logger.info(f'{task} - Evaluation results:')
             for key in results:
-                logger.info(f'  {key}: {results[key]}')
+                logger.info(f'{task} -  {key}: {results[key]}')
 
             # dump results
             json.dump(
                 results,
-                open(params.output_dir /
-                     f'{model_to_save.__class__.__name__}_{task}_results.json', 'w'),
+                open(params.output_dir / f'{model.__class__.__name__}_{task}_results.json', 'w'),
                 indent=4
             )
 

@@ -111,7 +111,9 @@ def main():
             logger.info('Initializing PyTorch distributed')
         torch.cuda.set_device(params.local_rank)
         torch.distributed.init_process_group(
-            backend='nccl', init_method='env://')
+            backend='nccl',
+            init_method='env://'
+        )
 
     # set seed(s)
     if params.is_master:
@@ -146,7 +148,9 @@ def main():
     if params.is_master:
         logger.info('Initializing the tokenizer')
     tokenizer = BertWordPieceTokenizer(
-        params.tokenizer_vocab_file, lowercase=params.do_lower_case)
+        params.tokenizer_vocab_file,
+        lowercase=params.do_lower_case
+    )
 
     # initialize the dataset
     if params.is_master:
@@ -240,7 +244,7 @@ def main():
         logger.info('Starting the distillation')
     distiller.distill()
 
-    # save the student model weights
+    # save the student model config and weights
     if params.is_master:
         logger.info('Saving the student model config')
         json.dump(

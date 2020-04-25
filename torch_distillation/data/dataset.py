@@ -177,8 +177,9 @@ GLUE_TASKS_MAPPING = {
             'sequence_b': 9,
             'label': -1
         }, 'labels': {
-            '0': 0,
-            '1': 1
+            'contradiction': 0,
+            'entailment': 1,
+            'neutral': 2
         }, 'type': 'classification'
     }, 'MNLI-MM': {
         'idxs': {
@@ -186,8 +187,9 @@ GLUE_TASKS_MAPPING = {
             'sequence_b': 9,
             'label': -1
         }, 'labels': {
-            '0': 0,
-            '1': 1
+            'contradiction': 0,
+            'entailment': 1,
+            'neutral': 2
         }, 'type': 'classification'
     }, 'MRPC': {
         'idxs': {
@@ -195,9 +197,8 @@ GLUE_TASKS_MAPPING = {
             'sequence_b': 4,
             'label': 0
         }, 'labels': {
-            'contradiction': 0,
-            'entailment': 1,
-            'neutral': 2
+            '0': 0,
+            '1': 1
         }, 'type': 'classification'
     }, 'SST-2': {
         'idxs': {
@@ -263,85 +264,107 @@ class GLUETaskDataset(TensorDataset):
 
     Args:
         task: The GLUE task.
-        dir: The path to the directory containing the GLUE task data.
+        dir: The path to the directory containing the task data.
         split: The data split (train, dev or test) to load.
         tokenizer: The tokenizer.
         encoding: The encoding used to decode the bytes. (default: 'utf-8')
         quotechar: The character used to quote special characters. (default: None)
+        overwrite_cache: Whether to overwrite the cache (if it exists) or not. (default: False)
     """
 
     def __init__(
         self,
         task: str,
-        dir: Union[str, Path],
+        dir: Path,
         split: str,
         tokenizer: Tokenizer,
         encoding: Optional[str] = 'utf-8',
-        quotchar: Optional[str] = None
+        quotchar: Optional[str] = None,
+        overwrite_cache: Optional[bool] = False
     ) -> None:
         self.task = task
         self._dir = Path(dir)
         self.split = split
         self._tokenizer = tokenizer
 
-        # get the path to the file containing the data
+        # hot fix for MNLI and MNLI-MM
+        if self.task == 'MNLI-MM':
+            self._dir = self._dir.parent / 'MNLI'
+            if self.split == 'dev':
+                self.split += '_mismatched'
         if self.task == 'MNLI' and self.split == 'dev':
             self.split += '_matched'
-        elif self.task == 'MNLI-MM' and self.split == 'dev':
-            self.split += '_mismatched'
-        
+
+        # get the path
         self._path = self._dir / f'{self.split}.tsv'
-        if not self._path.exists():
-            raise FileNotFoundError(
-                f'{self.task} GLUE task {self.split} data file not found: {str(self._path)}')
+        self._cached_sequences_path = self._dir / f'cached_{self.split}_{self._tokenizer.__class__.__name__}_sequences.pth'
+        self._cached_attention_masks_path = self._dir / f'cached_{self.split}_{self._tokenizer.__class__.__name__}_attention_masks.pth'
+        self._cached_labels_path = self._dir / f'cached_{self.split}_{self._tokenizer.__class__.__name__}_labels.pth'
 
         # get the mapping
         self.mapping = GLUE_TASKS_MAPPING[self.task]
 
-        # load the data
-        data = read_tsv(self._path, encoding=encoding, quotechar=quotchar)
-        if self.task != 'CoLA':
-            data = data[1:]
-
-        # convert data to sequences (pairs) and labels
-        self.sequences = []
-        self.labels = []
-        for line in data:
-            # first sequence
-            sequence_a = line[self.mapping['idxs']['sequence_a']]
-
-            # second sequence (optional)
-            if self.mapping['idxs']['sequence_b'] is not None:
-                sequence_b = line[self.mapping['idxs']['sequence_b']]
-                self.sequences.append((sequence_a, sequence_b))
-            else:
-                self.sequences.append(sequence_a)
-
-            # label
-            label = line[self.mapping['idxs']['label']]
-            if self.mapping['type'] == 'classification':
-                label = self.mapping['labels'][label]
-            elif self.mapping['type'] == 'regression':
-                label = float(label)
-
-            self.labels.append(label)
-
-        # tokenize the sequences (pairs)
-        encoded_sequences = self._tokenizer.encode_batch(self.sequences)
-        self.sequences = [
-            encoded_sequence.ids for encoded_sequence in encoded_sequences]
-        self.attention_masks = [
-            encoded_sequence.attention_mask for encoded_sequence in encoded_sequences]
-
-        # convert to torch tensors
-        self.sequences = torch.tensor(self.sequences, dtype=torch.long)
-        self.attention_masks = torch.tensor(self.attention_masks, dtype=torch.long)
-        if self.mapping['type'] == 'classification':
-            self.labels = torch.tensor(self.labels, dtype=torch.long)
+        if (
+            self._cached_sequences_path.exists()
+            and self._cached_attention_masks_path.exists()
+            and self._cached_labels_path.exists()
+            and not overwrite_cache
+        ):
+            # load tensors from cache
+            self.sequences = torch.load(self._cached_sequences_path)
+            self.attention_masks = torch.load(self._cached_attention_masks_path)
+            self.labels = torch.load(self._cached_labels_path)
         else:
-            self.labels = torch.tensor(self.labels, dtype=torch.float)
+            if not self._path.exists():
+                raise FileNotFoundError(f'{self.task} GLUE task {self.split} data file not found: {str(self._path)}')
 
-        if not self.sequences.size(0) == self.attention_masks.size(0) == self.labels.size(0):
-            raise ValueError('The sequences, attention masks and labels are of unequal size.')
+            # load the data
+            data = read_tsv(self._path, encoding=encoding, quotechar=quotchar)
+            if self.task != 'CoLA':
+                data = data[1:]
+
+            # convert data to sequences (pairs) and labels
+            self.sequences = []
+            self.labels = []
+            for line in data:
+                # first sequence
+                sequence_a = line[self.mapping['idxs']['sequence_a']]
+
+                # second sequence (optional)
+                if self.mapping['idxs']['sequence_b'] is not None:
+                    sequence_b = line[self.mapping['idxs']['sequence_b']]
+                    self.sequences.append((sequence_a, sequence_b))
+                else:
+                    self.sequences.append(sequence_a)
+
+                # label
+                label = line[self.mapping['idxs']['label']]
+                if self.mapping['type'] == 'classification':
+                    label = self.mapping['labels'][label]
+                elif self.mapping['type'] == 'regression':
+                    label = float(label)
+
+                self.labels.append(label)
+
+            # tokenize the sequences (pairs)
+            encoded_sequences = self._tokenizer.encode_batch(self.sequences)
+            self.sequences = [encoded_sequence.ids for encoded_sequence in encoded_sequences]
+            self.attention_masks = [encoded_sequence.attention_mask for encoded_sequence in encoded_sequences]
+
+            # convert to torch tensors
+            self.sequences = torch.tensor(self.sequences, dtype=torch.long)
+            self.attention_masks = torch.tensor(self.attention_masks, dtype=torch.long)
+            if self.mapping['type'] == 'classification':
+                self.labels = torch.tensor(self.labels, dtype=torch.long)
+            else:
+                self.labels = torch.tensor(self.labels, dtype=torch.float)
+
+            if not self.sequences.size(0) == self.attention_masks.size(0) == self.labels.size(0):
+                raise ValueError('The sequences, attention masks and labels are of unequal size.')
+
+            # save tensors to cache
+            torch.save(self.sequences, self._cached_sequences_path)
+            torch.save(self.attention_masks, self._cached_attention_masks_path)
+            torch.save(self.labels, self._cached_labels_path)
 
         self.tensors = (self.sequences, self.attention_masks, self.labels)
