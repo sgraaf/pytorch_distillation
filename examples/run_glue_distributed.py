@@ -343,7 +343,6 @@ def main():
         # prepare the GLUE task
         if params.is_master:
             logger.info(f'Preparing the {task} GLUE task')
-        task_dir = params.glue_dir / task
 
         # initialize the model
         if params.is_master:
@@ -369,7 +368,7 @@ def main():
                 logger.info(f'{task} - Initializing the training dataset')
             train_dataset = GLUETaskDataset(
                 task=task,
-                dir=task_dir,
+                glue_dir=params.glue_dir,
                 split='train',
                 tokenizer=tokenizer
             )
@@ -486,7 +485,7 @@ def main():
             logger.info(f'{task} - Initializing the evaluation dataset')
             eval_dataset = GLUETaskDataset(
                 task=task,
-                dir=task_dir,
+                glue_dir=params.glue_dir,
                 split='dev',
                 tokenizer=tokenizer
             )
