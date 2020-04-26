@@ -91,7 +91,7 @@ def train(
             logger.info(f'{task} - Starting with epoch {epoch+1}/{num_epochs}')
 
         # initialize the progress bar
-        if use_tqdm:
+        if is_master and use_tqdm:
             pbar = tqdm(
                 desc=f'Training {task} [epoch {epoch+1}/{num_epochs}]',
                 total=len(dataloader),
@@ -143,12 +143,12 @@ def train(
                 optimizer.zero_grad()
 
             # update the progress bar
-            if use_tqdm:
+            if is_master and use_tqdm:
                 pbar.update()
                 pbar.set_postfix({'last_loss': last_loss})
 
         # close the progress bar
-        if use_tqdm:
+        if is_master and use_tqdm:
             pbar.close()
 
 
