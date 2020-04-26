@@ -332,24 +332,27 @@ class GLUETaskDataset(TensorDataset):
             self.sequences = []
             self.labels = []
             for line in data:
-                # first sequence
-                sequence_a = line[self.mapping['idxs']['sequence_a']]
+                try:
+                    # first sequence
+                    sequence_a = line[self.mapping['idxs']['sequence_a']]
 
-                # second sequence (optional)
-                if self.mapping['idxs']['sequence_b'] is not None:
-                    sequence_b = line[self.mapping['idxs']['sequence_b']]
-                    self.sequences.append((sequence_a, sequence_b))
-                else:
-                    self.sequences.append(sequence_a)
+                    # second sequence (optional)
+                    if self.mapping['idxs']['sequence_b'] is not None:
+                        sequence_b = line[self.mapping['idxs']['sequence_b']]
+                        self.sequences.append((sequence_a, sequence_b))
+                    else:
+                        self.sequences.append(sequence_a)
 
-                # label
-                label = line[self.mapping['idxs']['label']]
-                if self.mapping['type'] == 'classification':
-                    label = self.mapping['labels'][label]
-                elif self.mapping['type'] == 'regression':
-                    label = float(label)
+                    # label
+                    label = line[self.mapping['idxs']['label']]
+                    if self.mapping['type'] == 'classification':
+                        label = self.mapping['labels'][label]
+                    elif self.mapping['type'] == 'regression':
+                        label = float(label)
 
-                self.labels.append(label)
+                    self.labels.append(label)
+                except IndexError:
+                    continue
 
             # tokenize the sequences (pairs)
             encoded_sequences = self._tokenizer.encode_batch(self.sequences)
