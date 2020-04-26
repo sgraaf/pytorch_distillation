@@ -334,14 +334,11 @@ class GLUETaskDataset(TensorDataset):
             for line in data:
                 try:
                     # first sequence
-                    sequence_a = line[self.mapping['idxs']['sequence_a']]
+                    sequence = line[self.mapping['idxs']['sequence_a']]
 
                     # second sequence (optional)
                     if self.mapping['idxs']['sequence_b'] is not None:
-                        sequence_b = line[self.mapping['idxs']['sequence_b']]
-                        self.sequences.append((sequence_a, sequence_b))
-                    else:
-                        self.sequences.append(sequence_a)
+                        sequence = (sequence, line[self.mapping['idxs']['sequence_b']])
 
                     # label
                     label = line[self.mapping['idxs']['label']]
@@ -350,6 +347,7 @@ class GLUETaskDataset(TensorDataset):
                     elif self.mapping['type'] == 'regression':
                         label = float(label)
 
+                    self.sequences.append(sequence)
                     self.labels.append(label)
                 except IndexError:
                     continue
