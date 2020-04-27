@@ -342,12 +342,17 @@ def main():
     tokenizer.enable_padding(max_length=params.max_sequence_len)
 
     # go over each task
-    tasks = [params.task_name] if params.task_name is not None else GLUE_TASKS
-    for task in tasks:
+    if params.task_name is not None:
+        tasks = [params.task_name]
+        output_dirs = [params.output_dir]
+    else:
+        tasks = GLUE_TASKS
+        output_dirs = [params.output_dir / task / params.seed for task in tasks]
+    
+    for task, task_output_dir in zip(tasks, output_dirs):
         # prepare the GLUE task
         if params.is_master:
             logger.info(f'Preparing the {task} GLUE task')
-        task_output_dir = params.output_dir / task / params.seed
         
         # make task_output_dir
         if task_output_dir.is_dir() and not params.force:
