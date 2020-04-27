@@ -491,7 +491,7 @@ def main():
                         finetuning_task=task
                     )
                     model = DistilBertForSequenceClassification.from_pretrained(
-                        str(params.output_dir / f'{model_to_save.__class__.__name__}_{task}_weights.pth'),
+                        str(task_output_dir / f'{model_to_save.__class__.__name__}_{task}_weights.pth'),
                         config=config
                     )
 
@@ -501,41 +501,55 @@ def main():
         # perform the evaluation
         if params.do_eval and params.is_master:
             logger.info(f'{task} - Initializing the evaluation dataset')
-            eval_dataset = GLUETaskDataset(
-                task=task,
-                glue_dir=params.glue_dir,
-                split='dev',
-                tokenizer=tokenizer
-            )
+            eval_datasets = [
+                GLUETaskDataset(
+                    task=task,
+                    glue_dir=params.glue_dir,
+                    split='dev',
+                    tokenizer=tokenizer
+                )
+            ]
 
-            # initialize the sampler
-            logger.info(f'{task} - Initializing the evaluation sampler')
-            eval_sampler = SequentialSampler(eval_dataset)
+            # hot fix for MNLI-MM
+            if task == 'MNLI':
+                eval_datasets.append(
+                    GLUETaskDataset(
+                        task='MNLI-MM',
+                        glue_dir=params.glue_dir,
+                        split='dev',
+                        tokenizer=tokenizer
+                    )
+                )
 
-            # initialize the dataloader
-            logger.info(f'{task} - Initializing the evaluation dataloader')
-            eval_dataloader = DataLoader(
-                dataset=eval_dataset,
-                sampler=eval_sampler,
-                batch_size=params.eval_batch_size
-            )
+            for eval_dataset in eval_datasets:
+                # initialize the sampler
+                logger.info(f'{eval_dataset.task} - Initializing the evaluation sampler')
+                eval_sampler = SequentialSampler(eval_dataset)
 
-            # start training
-            if params.is_master:
-                logger.info(f'{task} - Starting the evaluation')
-            results = evaluate(
-                task=task,
-                model=model,
-                dataloader=eval_dataloader,
-                use_cuda=params.use_cuda,
-                local_rank=params.local_rank,
-                use_tqdm=True,
-            )
+                # initialize the dataloader
+                logger.info(f'{eval_dataset.task} - Initializing the evaluation dataloader')
+                eval_dataloader = DataLoader(
+                    dataset=eval_dataset,
+                    sampler=eval_sampler,
+                    batch_size=params.eval_batch_size
+                )
 
-            # log results
-            logger.info(f'{task} - Evaluation results:')
-            for key in results:
-                logger.info(f'{task} -  {key}: {results[key]}')
+                # start training
+                if params.is_master:
+                    logger.info(f'{eval_dataset.task} - Starting the evaluation')
+                results = evaluate(
+                    task=task,
+                    model=model,
+                    dataloader=eval_dataloader,
+                    use_cuda=params.use_cuda,
+                    local_rank=params.local_rank,
+                    use_tqdm=True,
+                )
+
+                # log results
+                logger.info(f'{eval_dataset.task} - Evaluation results:')
+                for key in results:
+                    logger.info(f'{eval_dataset.task} -  {key}: {results[key]}')
 
                 # dump results
                 json.dump(
