@@ -347,7 +347,7 @@ def main():
         output_dirs = [params.output_dir]
     else:
         tasks = GLUE_TASKS
-        output_dirs = [params.output_dir / task / params.seed for task in tasks]
+        output_dirs = [params.output_dir / task / str(params.seed) for task in tasks]
     
     for task, task_output_dir in zip(tasks, output_dirs):
         # prepare the GLUE task
