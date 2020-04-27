@@ -277,27 +277,26 @@ class GLUETaskDataset(TensorDataset):
         self.split = split
         self._tokenizer = tokenizer
 
-        # hot fix for MNLI-MM task_dir
+        # hot fix for MNLI-MM task_dir and mapping
         if self.task == 'MNLI-MM':
             self._task_dir = self._glue_dir / 'MNLI'
+            self.mapping = GLUE_TASKS_MAPPING['MNLI']
         else:
             self._task_dir = self._glue_dir / self.task
+            self.mapping = GLUE_TASKS_MAPPING[self.task]
 
         # hot fix for MNLI and MNLI-MM dev data
         if self.split == 'dev':
             if self.task == 'MNLI':
                 self.split += '_matched'
             elif self.task == 'MNLI-MM':
-                self.split += '_mismatched'            
+                self.split += '_mismatched'          
 
         # get the path
         self._path = self._task_dir / f'{self.split}.tsv'
         self._cached_sequences_path = self._task_dir / f'cached_{self.split}_{self._tokenizer.__class__.__name__}_sequences.pth'
         self._cached_attention_masks_path = self._task_dir / f'cached_{self.split}_{self._tokenizer.__class__.__name__}_attention_masks.pth'
         self._cached_labels_path = self._task_dir / f'cached_{self.split}_{self._tokenizer.__class__.__name__}_labels.pth'
-
-        # get the mapping
-        self.mapping = GLUE_TASKS_MAPPING[self.task]
 
         if (
             self._cached_sequences_path.exists()
