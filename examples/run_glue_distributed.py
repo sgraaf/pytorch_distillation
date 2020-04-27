@@ -232,7 +232,7 @@ def evaluate(
     if task == 'CoLA':
         return {'mcc': matthews(predictions, targets)}
     elif task in {'MNLI', 'MNLI-MM', 'SST-2', 'QNLI', 'RTE', 'WNLI'}:
-        results = {'acc': accuracy(predictions, targets)}
+        return {'acc': accuracy(predictions, targets)}
     elif task in {'MRPC', 'QQP'}:
         return {'acc': accuracy(predictions, targets), 'f1': f1(predictions, targets)}
     elif task == 'STS-B':
