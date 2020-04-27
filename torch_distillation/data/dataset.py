@@ -181,16 +181,6 @@ GLUE_TASKS_MAPPING = {
             'entailment': 1,
             'neutral': 2
         }, 'type': 'classification'
-    }, 'MNLI-MM': {
-        'idxs': {
-            'sequence_a': 8,
-            'sequence_b': 9,
-            'label': -1
-        }, 'labels': {
-            'contradiction': 0,
-            'entailment': 1,
-            'neutral': 2
-        }, 'type': 'classification'
     }, 'MRPC': {
         'idxs': {
             'sequence_a': 3,

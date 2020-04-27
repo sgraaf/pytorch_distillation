@@ -39,6 +39,10 @@ logger = logging.getLogger(__name__)
 logging.getLogger('transformers.modeling_utils').setLevel(logging.ERROR)
 logging.getLogger('transformers.configuration_utils').setLevel(logging.ERROR)
 
+TRAINED_CONFIG_FILE_TEMPLATE = '{model_name}_{task}_config.json'
+TRAINED_WEIGHTS_FILE_TEMPLATE = '{model_name}_{task}_weights.pth'
+RESULTS_FILE_TEMPLATE = '{model_name}_{task}_results.json'
+
 
 def accuracy(predictions: np.ndarray, targets: np.ndarray) -> float:
     return (predictions == targets).mean()
@@ -343,6 +347,13 @@ def main():
         # prepare the GLUE task
         if params.is_master:
             logger.info(f'Preparing the {task} GLUE task')
+        task_output_dir = params.output_dir / task / params.seed
+        
+        # make task_output_dir
+        if task_output_dir.is_dir() and not params.force:
+            raise ValueError(f'Task output directory {task_output_dir} already exists. Use `--force` if you want to overwrite it.')
+        if params.is_master:
+            task_output_dir.mkdir(parents=True, exist_ok=params.force)
 
         # initialize the model
         if params.is_master:
@@ -452,15 +463,22 @@ def main():
                 logger.info(f'{task} - Saving the finetuned model config')
                 json.dump(
                     vars(model_to_save.config),
-                    open(params.output_dir / f'{model_to_save.__class__.__name__}_{task}_config.json', 'w'),
-                    indent=4,
+                    open(
+                        task_output_dir / TRAINED_CONFIG_FILE_TEMPLATE.format(
+                            model_name=model_to_save.__class__.__name__,
+                            task=task
+                        ), mode='w'
+                    ), indent=4,
                     sort_keys=True
                 )
 
                 logger.info(f'{task} - Saving the finetuned model weights')
                 torch.save(
                     model_to_save.state_dict(),
-                    params.output_dir / f'{model_to_save.__class__.__name__}_{task}_weights.pth'
+                    task_output_dir / TRAINED_WEIGHTS_FILE_TEMPLATE.format(
+                        model_name=model_to_save.__class__.__name__,
+                        task=task
+                    )
                 )
 
                 # reload the model
@@ -468,7 +486,7 @@ def main():
                     if params.is_master:
                         logger.info(f'{task} - Reloading the model')
                     config = DistilBertConfig.from_pretrained(
-                        str(params.output_dir / f'{model_to_save.__class__.__name__}_{task}_config.json'),
+                        str(task_output_dir / f'{model_to_save.__class__.__name__}_{task}_config.json'),
                         num_labels=len(GLUE_TASKS_MAPPING[task]['labels']),
                         finetuning_task=task
                     )
@@ -519,12 +537,12 @@ def main():
             for key in results:
                 logger.info(f'{task} -  {key}: {results[key]}')
 
-            # dump results
-            json.dump(
-                results,
-                open(params.output_dir / f'{model.__class__.__name__}_{task}_results.json', 'w'),
-                indent=4
-            )
+                # dump results
+                json.dump(
+                    results,
+                    open(task_output_dir / RESULTS_FILE_TEMPLATE.format(model_name=model.__class__.__name__, task=task), 'w'),
+                    indent=4
+                )
 
         if params.is_master:
             logger.info(f'Done with the {task} GLUE task')
