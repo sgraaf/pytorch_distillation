@@ -5,6 +5,7 @@
 import bisect
 import copy
 import csv
+import json
 from pathlib import Path
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
@@ -39,6 +40,7 @@ def quantize(l: Sequence[int], bins: List[int]) -> List[int]:
 
     return quantized_l
 
+
 def read_csv(file: Path, encoding: Optional[str] = 'utf-8', delimiter: Optional[str] = ',', quotechar: Optional[str] = None):
     """Reads a comma-separated value (CSV) file.
     
@@ -51,6 +53,7 @@ def read_csv(file: Path, encoding: Optional[str] = 'utf-8', delimiter: Optional[
     with open(file, 'r', encoding=encoding) as f:
         return list(csv.reader(f, delimiter=delimiter, quotechar=quotechar))
 
+
 def read_tsv(file: Path, encoding: Optional[str] = 'utf-8', quotechar: Optional[str] = None):
     """Reads a tab-separated value (TSV) file.
     
@@ -60,3 +63,13 @@ def read_tsv(file: Path, encoding: Optional[str] = 'utf-8', quotechar: Optional[
         quotechar: The character used to quote fields containing special characters.
     """
     return read_csv(file, encoding=encoding, delimiter='\t', quotechar=quotechar)
+
+
+def read_json(file: Path, encoding: Optional[str] = 'utf-8'):
+    """Reads a JavaScript Object Notation (JSON) file.
+    
+    Args:
+        file: The path to the JSON-file.
+        encoding: The encoding used to decode the bytes.
+    """
+    return json.load(open(file, 'r', encoding=encoding))

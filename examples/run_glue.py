@@ -11,6 +11,7 @@ from typing import Optional
 
 import numpy as np
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.optim as optim
 from scipy.stats import pearsonr, spearmanr
@@ -36,8 +37,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # suppress transformers logging
-logging.getLogger('transformers.modeling_utils').setLevel(logging.ERROR)
-logging.getLogger('transformers.configuration_utils').setLevel(logging.ERROR)
+logging.getLogger('transformers.modeling_utils').setLevel(logging.WARNING)
+logging.getLogger('transformers.configuration_utils').setLevel(logging.WARNING)
 
 TRAINED_CONFIG_FILE_TEMPLATE = '{model_name}_{task}_config.json'
 TRAINED_WEIGHTS_FILE_TEMPLATE = '{model_name}_{task}_weights.pth'
@@ -89,7 +90,7 @@ def train(
     for epoch in range(num_epochs):
         # synchronize all processes
         if use_distributed:
-            torch.distributed.barrier()
+            dist.barrier()
 
         if is_master and logger is not None:
             logger.info(f'{task} - Starting with epoch {epoch+1}/{num_epochs}')
@@ -259,16 +260,18 @@ def main():
                         required=True, help='Path to the model initialization weights.')
     parser.add_argument('--tokenizer_vocab_file', type=str, metavar='PATH',
                         required=True, help='Path to the tokenizer vocabulary.')
+    parser.add_argument('--overwrite_cache', action='store_true',
+                        help='Overwrite the cache if it already exists.')
     parser.add_argument('--max_sequence_len', type=int, default=128,
                         metavar='N', help='The maximum length of a sequence.')
     parser.add_argument('--do_lower_case', action='store_true',
                         help='Whether to lowercase the input when tokenizing.')
     parser.add_argument('-n', '--num_epochs', type=int, default=3,
                         metavar='N', help='The number of distillation epochs.')
-    parser.add_argument('--train_batch_size', type=int,
-                        default=8, metavar='N', help='The batch size used during training.')
-    parser.add_argument('--eval_batch_size', type=int,
-                        default=8, metavar='N', help='The batch size used during evaluation.')
+    parser.add_argument('--per_gpu_train_batch_size', type=int,
+                        default=8, metavar='N', help='The batch size per GPU used during training.')
+    parser.add_argument('--per_gpu_eval_batch_size', type=int,
+                        default=8, metavar='N', help='The batch size per GPU used during evaluation.')
     parser.add_argument('-lr', '--learning_rate', type=float,
                         default=2e-5, metavar='F', help='The initial learning rate.')
     parser.add_argument('--epsilon', type=float, default=1e-8,
@@ -291,6 +294,12 @@ def main():
 
     if not params.use_distributed:
         params.local_rank = 0
+        params.train_batch_size = params.per_gpu_train_batch_size
+        params.eval_batch_size = params.per_gpu_eval_batch_size
+    else:
+         params.num_gpus = torch.cuda.device_count()
+         params.train_batch_size = params.per_gpu_train_batch_size * params.num_gpus
+         params.eval_batch_size = params.per_gpu_eval_batch_size * params.num_gpus
     params.is_master = params.local_rank == 0
 
     # make output_dir
@@ -315,7 +324,7 @@ def main():
         if params.is_master:
             logger.info('Initializing PyTorch distributed')
         torch.cuda.set_device(params.local_rank)
-        torch.distributed.init_process_group(
+        dist.init_process_group(
             backend='nccl',
             init_method='env://'
         )
@@ -386,7 +395,8 @@ def main():
                 task=task,
                 glue_dir=params.glue_dir,
                 split='train',
-                tokenizer=tokenizer
+                tokenizer=tokenizer,
+                overwrite_cache=params.overwrite_cache
             )
 
             # initialize the sampler
@@ -433,6 +443,8 @@ def main():
 
             # initialize distributed data parallel (DDP)
             if params.use_distributed:
+                if params.is_master:
+                    logger.info('Initializing DDP')
                 model = DDP(
                     model,
                     device_ids=[params.local_rank],
@@ -491,12 +503,18 @@ def main():
                     if params.is_master:
                         logger.info(f'{task} - Reloading the model')
                     config = DistilBertConfig.from_pretrained(
-                        str(task_output_dir / f'{model_to_save.__class__.__name__}_{task}_config.json'),
+                        str(task_output_dir / TRAINED_CONFIG_FILE_TEMPLATE.format(
+                            model_name=model_to_save.__class__.__name__,
+                            task=task
+                        )),
                         num_labels=len(GLUE_TASKS_MAPPING[task]['labels']),
                         finetuning_task=task
                     )
                     model = DistilBertForSequenceClassification.from_pretrained(
-                        str(task_output_dir / f'{model_to_save.__class__.__name__}_{task}_weights.pth'),
+                        str(task_output_dir / TRAINED_WEIGHTS_FILE_TEMPLATE.format(
+                            model_name=model_to_save.__class__.__name__,
+                            task=task
+                        )),
                         config=config
                     )
 
@@ -505,13 +523,15 @@ def main():
 
         # perform the evaluation
         if params.do_eval and params.is_master:
+            # initialize the evaluation dataset
             logger.info(f'{task} - Initializing the evaluation dataset')
             eval_datasets = [
                 GLUETaskDataset(
                     task=task,
                     glue_dir=params.glue_dir,
                     split='dev',
-                    tokenizer=tokenizer
+                    tokenizer=tokenizer,
+                    overwrite_cache=params.overwrite_cache
                 )
             ]
 
@@ -539,27 +559,26 @@ def main():
                     batch_size=params.eval_batch_size
                 )
 
-                # start training
-                if params.is_master:
-                    logger.info(f'{eval_dataset.task} - Starting the evaluation')
+                # start evaluating
+                logger.info(f'{eval_dataset.task} - Starting the evaluation')
                 results = evaluate(
                     task=task,
                     model=model,
                     dataloader=eval_dataloader,
                     use_cuda=params.use_cuda,
                     local_rank=params.local_rank,
-                    use_tqdm=True,
+                    use_tqdm=True
                 )
 
                 # log results
                 logger.info(f'{eval_dataset.task} - Evaluation results:')
-                for key in results:
-                    logger.info(f'{eval_dataset.task} -  {key}: {results[key]}')
+                for key, result in results.items():
+                    logger.info(f'{eval_dataset.task} -  {key}: {result}')
 
                 # dump results
                 json.dump(
                     results,
-                    open(task_output_dir / RESULTS_FILE_TEMPLATE.format(model_name=model.__class__.__name__, task=task), 'w'),
+                    open(task_output_dir / RESULTS_FILE_TEMPLATE.format(model_name=model.__class__.__name__, task=eval_dataset.task), 'w'),
                     indent=4
                 )
 

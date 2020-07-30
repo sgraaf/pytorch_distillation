@@ -49,18 +49,15 @@ class LanguageModelingDataset(Dataset):
                 self.sequences.append(line.rstrip('\n'))
 
         if do_tokenize:  # tokenize the data
-            self.sequences = [
-                sequence.ids for sequence in self._tokenizer.encode_batch(self.sequences)]
+            self.sequences = [sequence.ids for sequence in self._tokenizer.encode_batch(self.sequences)]
         else:  # split the pre-tokenized data
             self.sequences = [sequence.split() for sequence in self.sequences]
 
         # convert to numpy arrays
-        self.sequences = np.array(
-            [np.array(sequence, dtype=np.uint16) for sequence in self.sequences])
+        self.sequences = np.array([np.array(sequence, dtype=np.uint16) for sequence in self.sequences])
 
         # compute sequence lengths
-        self.lengths = np.array([len(sequences)
-                                 for sequences in self.sequences])
+        self.lengths = np.array([len(sequences) for sequences in self.sequences])
 
         # create special_tokens_map
         self.special_tokens_map = dict()
