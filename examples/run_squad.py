@@ -263,7 +263,7 @@ def load_and_cache_examples(
     ):
         # load tensors from cache
         dataset = torch.load(cached_dataset_path)
-        examples = torch.load(cached_features_path)
+        examples = torch.load(cached_examples_path)
         features = torch.load(cached_features_path)
     else:
         # load and process the data
