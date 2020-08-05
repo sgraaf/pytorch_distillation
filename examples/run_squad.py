@@ -59,7 +59,7 @@ def train(
     lr_scheduler: Optional[LRScheduler] = None,
     num_gradient_accumulation_steps: Optional[int] = 1,
     max_gradient_norm: Optional[float] = None,
-    use_cuda: Optional[bool] = False,
+    device: Optional[torch.device] = torch.device('cpu'),
     local_rank: Optional[int] = 0,
     use_distributed: Optional[bool] = False,
     is_master: Optional[bool] = True,
@@ -92,12 +92,11 @@ def train(
             # unpack batch
             sequences, attention_masks, _, start_positions, end_positions, _, _, _ = batch
 
-            # send sequences, attention_masks, start_positions and end_positions to GPU
-            if use_cuda:
-                sequences = sequences.to(f'cuda:{local_rank}')
-                attention_masks = attention_masks.to(f'cuda:{local_rank}')
-                start_positions = start_positions.to(f'cuda:{local_rank}')
-                end_positions = end_positions.to(f'cuda:{local_rank}')
+            # send sequences, attention_masks, start_positions and end_positions to device
+            sequences = sequences.to(device)
+            attention_masks = attention_masks.to(device)
+            start_positions = start_positions.to(device)
+            end_positions = end_positions.to(device)
 
             # forward pass (loss computation included)
             outputs = model(
@@ -157,7 +156,7 @@ def evaluate(
     features: List[SquadFeatures],
     max_answer_len: Optional[int] = 30,
     do_lower_case: Optional[bool] = False,
-    use_cuda: Optional[bool] = False,
+    device: Optional[torch.device] = torch.device('cpu'),
     local_rank: Optional[int] = 0,
     use_tqdm: Optional[bool] = True,
 ) -> Dict[str, float]:
@@ -180,11 +179,10 @@ def evaluate(
         # unpack batch
         sequences, attention_masks, _, feature_indices, _, _ = batch
 
-        # send sequences, attention_masks and feature_indices to GPU
-        if use_cuda:
-            sequences = sequences.to(f'cuda:{local_rank}')
-            attention_masks = attention_masks.to(f'cuda:{local_rank}')
-            feature_indices = feature_indices.to(f'cuda:{local_rank}')
+        # send sequences, attention_masks and feature_indices to device
+        sequences = sequences.to(device)
+        attention_masks = attention_masks.to(device)
+        feature_indices = feature_indices.to(device)
 
         with torch.no_grad():
             # forward pass (loss compution included)
@@ -230,6 +228,7 @@ def evaluate(
 
     # compute the Exact Match (EM) and F1-scores.
     results = squad_evaluate(examples, predictions)
+    
     return results
 
 
@@ -372,6 +371,11 @@ def main():
         params.eval_batch_size = params.per_gpu_eval_batch_size * params.num_gpus
     params.is_master = params.local_rank == 0
 
+    if params.use_cuda:
+        device = torch.device('cuda', params.local_rank)
+    else:
+        device = torch.device('cpu')
+
     if Path(params.output_dir).is_dir() and not params.force:
         raise ValueError(f'Output directory {params.output_dir} already exists. Use `--force` if you want to overwrite it.')
     if params.is_master:
@@ -386,6 +390,9 @@ def main():
         )
     params.squad_dir = Path(params.squad_dir)
     params.output_dir = Path(params.output_dir)
+    params.device = device
+
+    print(params.device)
 
     # initialize multi-GPU
     if params.use_distributed:
@@ -421,9 +428,8 @@ def main():
     model = DistilBertForQuestionAnswering.from_pretrained(
         params.weights_file, config=config)
 
-    # send model to GPU
-    if params.use_cuda:
-        model = model.to(f'cuda:{params.local_rank}')
+    # send model to device
+    model = model.to(params.device)
 
     # perform the training
     if params.do_train:
@@ -507,7 +513,7 @@ def main():
             lr_scheduler=lr_scheduler,
             num_gradient_accumulation_steps=params.num_gradient_accumulation_steps,
             max_gradient_norm=params.max_gradient_norm,
-            use_cuda=params.use_cuda,
+            device=params.device,
             local_rank=params.local_rank,
             use_distributed=params.use_distributed,
             is_master=params.is_master,
@@ -555,9 +561,7 @@ def main():
                         model_name=model_to_save.__class__.__name__)),
                     config=config
                 )
-
-                if params.use_cuda:
-                    model = model.to(f'cuda:{params.local_rank}')
+                model = model.to(params.device)
 
     # perform the evaluation
     if params.do_eval and params.is_master:
@@ -598,7 +602,7 @@ def main():
             dataloader=eval_dataloader,
             examples=examples,
             features=features,
-            use_cuda=params.use_cuda,
+            device=params.device,
             local_rank=params.local_rank,
             use_tqdm=True
         )
