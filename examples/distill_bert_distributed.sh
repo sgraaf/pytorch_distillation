@@ -1,12 +1,12 @@
 #!/bin/bash
 export NODE_RANK=0
-export N_NODES=1
-export N_GPU_NODE=4
-export WORLD_SIZE=4
+export NUM_NODES=1
+export NUM_GPUS_PER_NODE=4
+export WORLD_SIZE=$(($NUM_NODES * $NUM_GPUS_PER_NODE))
 
 python -m torch.distributed.launch \
-    --nproc_per_node=$N_GPU_NODE \
-    --nnodes=$N_NODES \
+    --nproc_per_node=$NUM_GPUS_PER_NODE \
+    --nnodes=$NUM_NODES \
     --node_rank $NODE_RANK \
     distill_bert_distributed.py \
         --data_file path/to/data/file.txt \

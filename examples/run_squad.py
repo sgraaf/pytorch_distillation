@@ -185,10 +185,11 @@ def evaluate(
         feature_indices = feature_indices.to(device)
 
         with torch.no_grad():
-            # forward pass (loss compution included)
+            # forward pass (loss computation included)
             outputs = model(
                 input_ids=sequences,
-                attention_mask=attention_masks
+                attention_mask=attention_masks,
+                output_hidden_states=False
             )
 
         # compute results for batch
@@ -391,8 +392,6 @@ def main():
     params.squad_dir = Path(params.squad_dir)
     params.output_dir = Path(params.output_dir)
     params.device = device
-
-    print(params.device)
 
     # initialize multi-GPU
     if params.use_distributed:
