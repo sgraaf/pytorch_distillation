@@ -75,7 +75,6 @@ def train(
     num_gradient_accumulation_steps: Optional[int] = 1,
     max_gradient_norm: Optional[float] = None,
     device: Optional[torch.device] = torch.device('cpu'),
-    local_rank: Optional[int] = 0,
     use_distributed: Optional[bool] = False,
     is_master: Optional[bool] = True,
     use_tqdm: Optional[bool] = True,
@@ -161,7 +160,6 @@ def evaluate(
     model: nn.Module,
     dataloader: DataLoader,
     device: Optional[torch.device] = torch.device('cpu'),
-    local_rank: Optional[int] = 0,
     use_tqdm: Optional[bool] = True,
 ) -> None:
     # put model in eval mode
@@ -352,7 +350,7 @@ def main():
 
     # enable truncation and padding
     tokenizer.enable_truncation(params.max_sequence_len)
-    tokenizer.enable_padding(max_length=params.max_sequence_len)
+    tokenizer.enable_padding(length=params.max_sequence_len)
 
     # go over each task
     if params.task_name is not None:
@@ -467,7 +465,6 @@ def main():
                 num_gradient_accumulation_steps=params.num_gradient_accumulation_steps,
                 max_gradient_norm=params.max_gradient_norm,
                 device=params.device,
-                local_rank=params.local_rank,
                 use_distributed=params.use_distributed,
                 is_master=params.is_master,
                 use_tqdm=True,
@@ -567,7 +564,6 @@ def main():
                     model=model,
                     dataloader=eval_dataloader,
                     device=params.device,
-                    local_rank=params.local_rank,
                     use_tqdm=True
                 )
 
