@@ -386,11 +386,13 @@ class SanhDistiller(Distiller):
                     sequences, lengths)
 
                 # forward pass
-                student_logits, student_hidden_states = self.student(
-                    sequences, attention_mask=attention_mask)
+                student_output = self.student(sequences, attention_mask=attention_mask)
+                student_logits = student_output.logits
+                student_hidden_states = student_output.hidden_states
                 with torch.no_grad():
-                    teacher_logits, teacher_hidden_states = self.teacher(
-                        sequences, attention_mask=attention_mask)
+                    teacher_output = self.teacher(sequences, attention_mask=attention_mask)
+                    teacher_logits = teacher_output.logits
+                    teacher_hidden_states = teacher_output.hidden_states
 
                 # select and reshape the logits
                 logits_mask = attention_mask.unsqueeze(
